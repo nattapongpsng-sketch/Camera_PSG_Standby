@@ -21,7 +21,6 @@ video{
   object-fit:cover;
 }
 
-/* 📝 ข้อความ */
 .hint{
   position:fixed;
   top:20px;
@@ -32,9 +31,23 @@ video{
   font-weight:bold;
   text-shadow:0 0 10px #000;
   z-index:20;
+  padding:0 16px;
+  box-sizing:border-box;
 }
 
-/* 👤 กรอบวงรี */
+.subhint{
+  position:fixed;
+  top:54px;
+  width:100%;
+  text-align:center;
+  color:#cffff2;
+  font-size:14px;
+  text-shadow:0 0 8px #000;
+  z-index:20;
+  padding:0 16px;
+  box-sizing:border-box;
+}
+
 .face-frame{
   position:fixed;
   top:50%;
@@ -42,17 +55,13 @@ video{
   transform:translate(-50%,-50%);
   width:min(72vw, 380px);
   height:min(92vw, 500px);
-
   border:4px solid #00ffc8;
   border-radius:50%;
-
   box-shadow:0 0 20px #00ffc8;
-
   z-index:10;
   pointer-events:none;
 }
 
-/* 🔵 เส้นสแกน */
 .scan-line{
   position:absolute;
   left:10%;
@@ -61,7 +70,6 @@ video{
   background:#00ffc8;
   box-shadow:0 0 12px #00ffc8;
   border-radius:999px;
-
   animation: scanMove 2.2s infinite ease-in-out;
 }
 
@@ -71,7 +79,29 @@ video{
   100%{ top:10%; }
 }
 
-/* 📸 ปุ่ม */
+.status-pill{
+  position:fixed;
+  bottom:92px;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(0,0,0,.55);
+  color:#fff;
+  border:1px solid rgba(255,255,255,.25);
+  border-radius:999px;
+  padding:10px 16px;
+  font-size:14px;
+  z-index:20;
+  min-width:220px;
+  text-align:center;
+  backdrop-filter:blur(4px);
+}
+
+.status-pill.ok{
+  background:rgba(0,120,80,.55);
+  color:#eafff8;
+  border-color:rgba(0,255,200,.45);
+}
+
 .btn{
   position:fixed;
   bottom:30px;
@@ -90,6 +120,33 @@ video{
 .btn:active{
   transform:translateX(-50%) scale(0.95);
 }
+
+.btn[disabled]{
+  opacity:.65;
+  cursor:not-allowed;
+}
+
+.debug-box{
+  position:fixed;
+  right:12px;
+  bottom:12px;
+  font-size:12px;
+  color:#d7fff4;
+  background:rgba(0,0,0,.45);
+  padding:8px 10px;
+  border-radius:10px;
+  z-index:20;
+  display:none;
+}
+
+.face-box{
+  position:fixed;
+  border:2px solid rgba(255,255,0,.9);
+  box-shadow:0 0 12px rgba(255,255,0,.8);
+  z-index:15;
+  pointer-events:none;
+  display:none;
+}
 </style>
 </head>
 
@@ -98,38 +155,115 @@ video{
 <video id="video" autoplay playsinline muted></video>
 
 <div class="hint">จัดใบหน้าให้อยู่ในกรอบ</div>
+<div class="subhint" id="subhint">ระบบจะถ่ายอัตโนมัติเมื่อใบหน้าอยู่ตรงกลาง</div>
 
-<div class="face-frame">
+<div class="face-frame" id="faceFrame">
   <div class="scan-line"></div>
 </div>
 
-<button class="btn" id="snapBtn">📸 ยืนยันตัวตน</button>
+<div class="status-pill" id="statusPill">กำลังเปิดกล้อง…</div>
+<button class="btn" id="snapBtn">📸 ถ่ายภาพ</button>
+
+<div class="face-box" id="faceBox"></div>
+<div class="debug-box" id="debugBox"></div>
 
 <script>
 const video = document.getElementById('video');
 const snapBtn = document.getElementById('snapBtn');
+const statusPill = document.getElementById('statusPill');
+const subhint = document.getElementById('subhint');
+const faceFrame = document.getElementById('faceFrame');
+const faceBox = document.getElementById('faceBox');
+const debugBox = document.getElementById('debugBox');
 
 let stream = null;
+let detector = null;
+let detectTimer = null;
+let stableHits = 0;
+let busyCapturing = false;
+let faceApiSupported = false;
 
-// ✅ เปิดกล้องอัตโนมัติ
-async function startCamera(){
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{ facingMode:"user" },
-      audio:false
-    });
-    video.srcObject = stream;
-  }catch(err){
-    alert("เปิดกล้องไม่ได้: " + err.message);
-  }
+const REQUIRED_STABLE_HITS = 4;  // อยู่ในกรอบต่อเนื่อง 4 รอบ
+const DETECT_INTERVAL_MS = 450;
+
+function setStatus(msg, ok=false){
+  statusPill.textContent = msg;
+  statusPill.classList.toggle('ok', ok);
 }
 
-// ✅ ถ่าย + ส่งกลับ
-snapBtn.onclick = () => {
-  if(!stream){
-    alert("กล้องยังไม่พร้อม");
-    return;
+function stopCamera(){
+  if(stream){
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
   }
+  video.srcObject = null;
+}
+
+function closeAndCleanup(){
+  if(detectTimer){
+    clearInterval(detectTimer);
+    detectTimer = null;
+  }
+  stopCamera();
+}
+
+function frameRect(){
+  return faceFrame.getBoundingClientRect();
+}
+
+function centerOf(r){
+  return {
+    x: r.left + r.width / 2,
+    y: r.top + r.height / 2
+  };
+}
+
+// ตรวจว่า center ของหน้าอยู่ในวงรี
+function pointInsideEllipse(px, py, rect){
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const rx = rect.width / 2;
+  const ry = rect.height / 2;
+
+  const dx = (px - cx) / rx;
+  const dy = (py - cy) / ry;
+  return (dx * dx + dy * dy) <= 1;
+}
+
+// แปลง bounding box จาก video coordinate -> viewport coordinate
+function toViewportRect(box){
+  const vr = video.getBoundingClientRect();
+  const vw = video.videoWidth || 1;
+  const vh = video.videoHeight || 1;
+
+  const scaleX = vr.width / vw;
+  const scaleY = vr.height / vh;
+
+  return {
+    left: vr.left + box.x * scaleX,
+    top: vr.top + box.y * scaleY,
+    width: box.width * scaleX,
+    height: box.height * scaleY
+  };
+}
+
+function drawFaceBox(r){
+  faceBox.style.display = 'block';
+  faceBox.style.left = `${r.left}px`;
+  faceBox.style.top = `${r.top}px`;
+  faceBox.style.width = `${r.width}px`;
+  faceBox.style.height = `${r.height}px`;
+}
+
+function hideFaceBox(){
+  faceBox.style.display = 'none';
+}
+
+function captureAndSend(){
+  if(busyCapturing) return;
+  busyCapturing = true;
+  snapBtn.disabled = true;
+  setStatus('กำลังถ่ายภาพ…', true);
 
   const canvas = document.createElement('canvas');
   canvas.width = 640;
@@ -140,30 +274,110 @@ snapBtn.onclick = () => {
 
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
-  // ส่งกลับ Web App
   if(window.opener){
     window.opener.postMessage({
-      type:"camera-image",
-      imageBase64:dataUrl
+      type: "camera-image",
+      imageBase64: dataUrl
     }, "*");
   }
 
-  // ปิดกล้อง
-  stream.getTracks().forEach(t => t.stop());
-
-  // ปิดหน้า
+  closeAndCleanup();
   window.close();
+}
+
+snapBtn.onclick = () => {
+  if(!stream){
+    alert("กล้องยังไม่พร้อม");
+    return;
+  }
+  captureAndSend();
 };
 
-// start auto
+async function detectLoop(){
+  if(!faceApiSupported || !detector || !stream || busyCapturing) return;
+
+  try{
+    const faces = await detector.detect(video);
+
+    if(!faces || !faces.length){
+      stableHits = 0;
+      hideFaceBox();
+      setStatus('ยังไม่พบใบหน้า');
+      return;
+    }
+
+    // ใช้หน้าที่ใหญ่สุด
+    const best = [...faces].sort((a,b)=>
+      (b.boundingBox.width * b.boundingBox.height) - (a.boundingBox.width * a.boundingBox.height)
+    )[0];
+
+    const viewRect = toViewportRect(best.boundingBox);
+    drawFaceBox(viewRect);
+
+    const faceCenter = centerOf(viewRect);
+    const oval = frameRect();
+
+    const inside = pointInsideEllipse(faceCenter.x, faceCenter.y, oval);
+
+    // เงื่อนไขเพิ่ม: ขนาดหน้าควรพอเหมาะกับกรอบ
+    const widthRatio = viewRect.width / oval.width;
+    const heightRatio = viewRect.height / oval.height;
+    const sizeOk = widthRatio >= 0.34 && widthRatio <= 0.82 && heightRatio >= 0.28 && heightRatio <= 0.82;
+
+    if(inside && sizeOk){
+      stableHits++;
+      setStatus(`ใบหน้าอยู่ในกรอบแล้ว (${stableHits}/${REQUIRED_STABLE_HITS})`, true);
+    }else{
+      stableHits = 0;
+      setStatus('ขยับใบหน้าให้อยู่กึ่งกลางกรอบ');
+    }
+
+    if(stableHits >= REQUIRED_STABLE_HITS){
+      setStatus('ตรวจพบใบหน้าในกรอบ กำลังถ่ายอัตโนมัติ…', true);
+      captureAndSend();
+    }
+
+  } catch(err){
+    setStatus('ตรวจจับใบหน้าไม่สำเร็จ ใช้ปุ่มถ่ายภาพแทน');
+    faceApiSupported = false;
+    hideFaceBox();
+    if(detectTimer){
+      clearInterval(detectTimer);
+      detectTimer = null;
+    }
+  }
+}
+
+async function startCamera(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode:"user" },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    // Feature detection
+    if("FaceDetector" in window){
+      detector = new FaceDetector({ fastMode: true, maxDetectedFaces: 3 });
+      faceApiSupported = true;
+      setStatus('เปิดกล้องแล้ว กำลังตรวจจับใบหน้า…');
+      subhint.textContent = 'ระบบจะถ่ายอัตโนมัติเมื่อใบหน้าอยู่ตรงกลางกรอบ';
+      detectTimer = setInterval(detectLoop, DETECT_INTERVAL_MS);
+    }else{
+      faceApiSupported = false;
+      setStatus('เบราว์เซอร์นี้ไม่รองรับตรวจจับใบหน้า ใช้ปุ่มถ่ายภาพแทน');
+      subhint.textContent = 'จัดใบหน้าให้อยู่ในกรอบ แล้วกดถ่ายภาพ';
+    }
+  } catch(err){
+    alert("เปิดกล้องไม่ได้: " + err.message);
+    setStatus('เปิดกล้องไม่สำเร็จ');
+  }
+}
+
 startCamera();
 
-// cleanup
-window.addEventListener("beforeunload", ()=>{
-  if(stream){
-    stream.getTracks().forEach(t => t.stop());
-  }
-});
+window.addEventListener("beforeunload", closeAndCleanup);
 </script>
 
 </body>
