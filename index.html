@@ -1,63 +1,183 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Camera</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera Scan</title>
 
-  <style>
-    body{
-      margin:0;
-      background:#000;
-      overflow:hidden;
-      font-family:sans-serif;
-    }
+<style>
+body{
+  margin:0;
+  background:#000;
+  overflow:hidden;
+  font-family:sans-serif;
+}
 
-    video{
-      position:fixed;
-      inset:0;
-      width:100%;
-      height:100%;
-      object-fit:cover;
-    }
+video{
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
 
-    .hint{
-      position:fixed;
-      top:20px;
-      width:100%;
-      text-align:center;
-      color:#fff;
-      font-size:18px;
-      font-weight:bold;
-      text-shadow:0 0 10px #000;
-    }
+/* 📝 ข้อความ */
+.hint{
+  position:fixed;
+  top:20px;
+  width:100%;
+  text-align:center;
+  color:#fff;
+  font-size:20px;
+  font-weight:bold;
+  text-shadow:0 0 10px #000;
+  z-index:20;
+}
 
-    .btn{
-      position:fixed;
-      bottom:30px;
-      left:50%;
-      transform:translateX(-50%);
-      background:#00ffc8;
-      border:none;
-      padding:18px 28px;
-      border-radius:50px;
-      font-size:20px;
-      font-weight:bold;
-      cursor:pointer;
-    }
+/* 👤 กรอบใบหน้าแบบทรงคน */
+.face-wrap{
+  position:fixed;
+  top:50%;
+  left:50%;
+  transform:translate(-50%,-50%);
+  width:min(72vw, 380px);
+  height:min(92vw, 500px);
+  z-index:10;
+  pointer-events:none;
+}
 
-    .btn:active{
-      transform:translateX(-50%) scale(0.95);
-    }
-  </style>
+/* ส่วนโค้งหัว */
+.face-top{
+  position:absolute;
+  top:0;
+  left:50%;
+  transform:translateX(-50%);
+  width:78%;
+  height:58%;
+  border:4px solid #00ffc8;
+  border-bottom:none;
+  border-radius:52% 52% 42% 42% / 46% 46% 38% 38%;
+  box-shadow:0 0 18px rgba(0,255,200,.85);
+}
+
+/* ส่วนคาง */
+.face-bottom{
+  position:absolute;
+  left:50%;
+  bottom:2%;
+  transform:translateX(-50%);
+  width:54%;
+  height:34%;
+  border-left:4px solid #00ffc8;
+  border-right:4px solid #00ffc8;
+  border-bottom:4px solid #00ffc8;
+  border-radius:0 0 42% 42% / 0 0 70% 70%;
+  box-shadow:0 0 18px rgba(0,255,200,.85);
+}
+
+/* เส้นช่วยตำแหน่งด้านข้าง */
+.face-guide-left,
+.face-guide-right{
+  position:absolute;
+  top:30%;
+  width:22%;
+  height:20%;
+  border-top:4px solid #00ffc8;
+  box-shadow:0 0 14px rgba(0,255,200,.75);
+}
+
+.face-guide-left{
+  left:8%;
+  border-left:4px solid #00ffc8;
+  border-top-left-radius:18px;
+}
+
+.face-guide-right{
+  right:8%;
+  border-right:4px solid #00ffc8;
+  border-top-right-radius:18px;
+}
+
+/* 🔵 เส้นสแกน */
+.scan-line{
+  position:absolute;
+  left:12%;
+  width:76%;
+  height:4px;
+  background:#00ffc8;
+  box-shadow:0 0 12px #00ffc8, 0 0 24px rgba(0,255,200,.9);
+  border-radius:999px;
+  animation: scanMove 2.2s infinite ease-in-out;
+}
+
+@keyframes scanMove{
+  0%{ top:14%; opacity:.9; }
+  50%{ top:78%; opacity:1; }
+  100%{ top:14%; opacity:.9; }
+}
+
+/* แสงเงารอบกรอบ */
+.face-glow{
+  position:absolute;
+  inset:0;
+  border-radius:42% 42% 38% 38% / 30% 30% 48% 48%;
+  box-shadow:inset 0 0 40px rgba(0,255,200,.06);
+}
+
+/* 📸 ปุ่ม */
+.btn{
+  position:fixed;
+  bottom:30px;
+  left:50%;
+  transform:translateX(-50%);
+  background:#00ffc8;
+  border:none;
+  padding:18px 30px;
+  border-radius:50px;
+  font-size:20px;
+  font-weight:bold;
+  cursor:pointer;
+  z-index:20;
+}
+
+.btn:active{
+  transform:translateX(-50%) scale(0.95);
+}
+
+@media (max-width: 480px){
+  .hint{
+    font-size:18px;
+    padding:0 16px;
+  }
+  .face-wrap{
+    width:min(82vw, 360px);
+    height:min(112vw, 500px);
+  }
+  .btn{
+    font-size:18px;
+    padding:16px 24px;
+    bottom:22px;
+  }
+}
+</style>
 </head>
 
 <body>
 
 <video id="video" autoplay playsinline muted></video>
 
-<div class="hint">แตะเพื่อถ่ายภาพ</div>
-<button class="btn" id="snapBtn">📸 ถ่ายภาพ</button>
+<div class="hint">จัดใบหน้าให้อยู่ในกรอบ แล้วกดยืนยันตัวตน</div>
+
+<div class="face-wrap">
+  <div class="face-top"></div>
+  <div class="face-bottom"></div>
+  <div class="face-guide-left"></div>
+  <div class="face-guide-right"></div>
+  <div class="scan-line"></div>
+  <div class="face-glow"></div>
+</div>
+
+<button class="btn" id="snapBtn">📸 ยืนยันตัวตน</button>
 
 <script>
 const video = document.getElementById('video');
@@ -78,7 +198,7 @@ async function startCamera(){
   }
 }
 
-// ✅ ถ่าย + ส่งกลับทันที
+// ✅ ถ่าย + ส่งกลับ
 snapBtn.onclick = () => {
   if(!stream){
     alert("กล้องยังไม่พร้อม");
@@ -92,27 +212,27 @@ snapBtn.onclick = () => {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
-  // ส่งกลับ GAS Web App
+  // ส่งกลับ Web App
   if(window.opener){
     window.opener.postMessage({
-      type: "camera-image",
-      imageBase64: dataUrl
+      type:"camera-image",
+      imageBase64:dataUrl
     }, "*");
   }
 
   // ปิดกล้อง
   stream.getTracks().forEach(t => t.stop());
 
-  // ปิดหน้าต่าง
+  // ปิดหน้า
   window.close();
 };
 
-// เริ่มกล้องทันที
+// start auto
 startCamera();
 
-// กัน memory leak
+// cleanup
 window.addEventListener("beforeunload", ()=>{
   if(stream){
     stream.getTracks().forEach(t => t.stop());
