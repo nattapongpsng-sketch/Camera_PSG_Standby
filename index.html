@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Camera Verification</title>
+
+<style>
+  body{
+    margin:0;
+    background:#000;
+    font-family:sans-serif;
+    overflow:hidden;
+  }
+
+  video{
+    position:fixed;
+    inset:0;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+  }
+
+  /* กรอบวงสำหรับใบหน้า */
+  .face-frame{
+    position:fixed;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%);
+    width:260px;
+    height:260px;
+    border:4px solid #00ffcc;
+    border-radius:50%;
+    box-shadow:0 0 20px rgba(0,255,200,0.8);
+    pointer-events:none;
+  }
+
+  /* overlay มืด */
+  .overlay{
+    position:fixed;
+    inset:0;
+    background:radial-gradient(circle at center, transparent 120px, rgba(0,0,0,0.7) 130px);
+    pointer-events:none;
+  }
+
+  .top-text{
+    position:fixed;
+    top:20px;
+    width:100%;
+    text-align:center;
+    color:#fff;
+    font-weight:bold;
+    font-size:18px;
+    text-shadow:0 0 10px #000;
+  }
+
+  .bottom{
+    position:fixed;
+    bottom:30px;
+    width:100%;
+    text-align:center;
+  }
+
+  button{
+    background:#00ffc8;
+    border:none;
+    padding:16px 28px;
+    border-radius:50px;
+    font-size:18px;
+    font-weight:bold;
+    cursor:pointer;
+  }
+
+  button:active{
+    transform:scale(0.95);
+  }
+</style>
+</head>
+
+<body>
+
+<video id="video" autoplay playsinline></video>
+
+<div class="overlay"></div>
+<div class="face-frame"></div>
+
+<div class="top-text">
+  กรุณาจัดใบหน้าให้อยู่ในกรอบ
+</div>
+
+<div class="bottom">
+  <button id="snap">📸 ถ่ายภาพยืนยัน</button>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const snapBtn = document.getElementById('snap');
+
+const allowedOrigin = 'https://script.google.com'; // 🔐 ปรับตาม Web App จริง
+
+// เปิดกล้อง
+async function startCamera(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
+      audio: false
+    });
+    video.srcObject = stream;
+  }catch(err){
+    alert('ไม่สามารถเปิดกล้องได้: ' + err.message);
+  }
+}
+
+startCamera();
+
+// ถ่ายภาพ
+snapBtn.onclick = () => {
+  const canvas = document.createElement('canvas');
+
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+
+  canvas.width = 640;
+  canvas.height = 480;
+
+  const ctx = canvas.getContext('2d');
+
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  // ✅ ใส่ timestamp กันโกง
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px Arial';
+  ctx.fillText(new Date().toLocaleString(), 10, canvas.height - 15);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+  // ✅ ส่งกลับ GAS
+  if(window.opener){
+    window.opener.postMessage({
+      image: dataUrl,
+      ts: Date.now()
+    }, allowedOrigin);
+  }
+
+  // ปิดหน้ากล้อง
+  window.close();
+};
+</script>
+
+</body>
+</html>
