@@ -1,154 +1,182 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Camera Verification</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Camera Test</title>
 
-<style>
-  body{
-    margin:0;
-    background:#000;
-    font-family:sans-serif;
-    overflow:hidden;
-  }
+  <style>
+    body{
+      font-family: Arial, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 24px;
+      text-align: center;
+      background: #f7f7fb;
+    }
+    .card{
+      background: #fff;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.08);
+    }
+    video, canvas, img{
+      width: 100%;
+      max-width: 480px;
+      background: #000;
+      border-radius: 12px;
+      margin-top: 12px;
+    }
+    canvas{ display:none; }
 
-  video{
-    position:fixed;
-    inset:0;
-    width:100%;
-    height:100%;
-    object-fit:cover;
-  }
+    .row{
+      margin-top: 16px;
+      display:flex;
+      gap:12px;
+      justify-content:center;
+      flex-wrap:wrap;
+    }
 
-  /* กรอบวงสำหรับใบหน้า */
-  .face-frame{
-    position:fixed;
-    top:50%;
-    left:50%;
-    transform:translate(-50%,-50%);
-    width:260px;
-    height:260px;
-    border:4px solid #00ffcc;
-    border-radius:50%;
-    box-shadow:0 0 20px rgba(0,255,200,0.8);
-    pointer-events:none;
-  }
+    button{
+      border:none;
+      border-radius:10px;
+      padding:12px 18px;
+      font-size:16px;
+      cursor:pointer;
+    }
 
-  /* overlay มืด */
-  .overlay{
-    position:fixed;
-    inset:0;
-    background:radial-gradient(circle at center, transparent 120px, rgba(0,0,0,0.7) 130px);
-    pointer-events:none;
-  }
+    .primary{ background:#6f42c1; color:#fff; }
+    .secondary{ background:#e9ecef; }
+    .success{ background:#198754; color:#fff; }
 
-  .top-text{
-    position:fixed;
-    top:20px;
-    width:100%;
-    text-align:center;
-    color:#fff;
-    font-weight:bold;
-    font-size:18px;
-    text-shadow:0 0 10px #000;
-  }
+    #log{
+      text-align:left;
+      background:#f1f3f5;
+      padding:12px;
+      border-radius:10px;
+      margin-top:16px;
+      font-size:13px;
+      white-space:pre-wrap;
+    }
 
-  .bottom{
-    position:fixed;
-    bottom:30px;
-    width:100%;
-    text-align:center;
-  }
-
-  button{
-    background:#00ffc8;
-    border:none;
-    padding:16px 28px;
-    border-radius:50px;
-    font-size:18px;
-    font-weight:bold;
-    cursor:pointer;
-  }
-
-  button:active{
-    transform:scale(0.95);
-  }
-</style>
+    .result{
+      margin-top:12px;
+      padding:12px;
+      background:#e8f7ee;
+      border-radius:10px;
+      display:none;
+    }
+  </style>
 </head>
 
 <body>
+  <div class="card">
+    <h2>📸 กล้อง (GitHub Pages)</h2>
 
-<video id="video" autoplay playsinline></video>
+    <div class="row">
+      <button id="startBtn" class="primary">เปิดกล้อง</button>
+      <button id="snapBtn" class="secondary">ถ่ายภาพ</button>
+      <button id="uploadBtn" class="success">ส่งเข้า GAS</button>
+      <button id="backBtn" class="secondary">ส่งกลับ GAS (postMessage)</button>
+    </div>
 
-<div class="overlay"></div>
-<div class="face-frame"></div>
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <img id="preview" style="display:none;">
 
-<div class="top-text">
-  กรุณาจัดใบหน้าให้อยู่ในกรอบ
-</div>
-
-<div class="bottom">
-  <button id="snap">📸 ถ่ายภาพยืนยัน</button>
-</div>
+    <div id="result" class="result"></div>
+    <pre id="log"></pre>
+  </div>
 
 <script>
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyW68WI1Bm7iY6CCSyFxvv3I3SV4PbM5Vovp3EvQtWKArq90PiFxAjCmUTuacNVUTUj/exec";
+
 const video = document.getElementById('video');
-const snapBtn = document.getElementById('snap');
+const canvas = document.getElementById('canvas');
+const preview = document.getElementById('preview');
+const log = document.getElementById('log');
+const resultBox = document.getElementById('result');
 
-const allowedOrigin = 'https://script.google.com/macros/s/AKfycbzKgoHkilrLIte03nHCcUyCzAsJegHzHlROxcz0kFKzqo-uZjyYrwflt9eGZIeUf_90wQ/exec'; // 🔐 ปรับตาม Web App จริง
+let stream = null;
+let captured = "";
 
-// เปิดกล้อง
+function write(msg){
+  log.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+}
+
 async function startCamera(){
   try{
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" },
-      audio: false
-    });
+    stream = await navigator.mediaDevices.getUserMedia({ video:true });
     video.srcObject = stream;
-  }catch(err){
-    alert('ไม่สามารถเปิดกล้องได้: ' + err.message);
+    write("เปิดกล้องสำเร็จ");
+  }catch(e){
+    write("เปิดกล้องไม่สำเร็จ: " + e.message);
   }
 }
 
-startCamera();
+function snap(){
+  if(!stream){ write("ยังไม่เปิดกล้อง"); return; }
 
-// ถ่ายภาพ
-snapBtn.onclick = () => {
-  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
 
-  const w = video.videoWidth;
-  const h = video.videoHeight;
+  canvas.getContext("2d").drawImage(video,0,0);
 
-  canvas.width = 640;
-  canvas.height = 480;
+  captured = canvas.toDataURL("image/jpeg",0.9);
+  preview.src = captured;
+  preview.style.display = "block";
 
-  const ctx = canvas.getContext('2d');
+  write("ถ่ายภาพแล้ว");
+}
 
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+// ✅ วิธีที่ 1 (แนะนำ) → ส่งเข้า GAS ตรง
+async function upload(){
+  if(!captured){ write("ยังไม่มีภาพ"); return; }
 
-  // ✅ ใส่ timestamp กันโกง
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+  write("กำลังส่งเข้า GAS...");
 
-  ctx.fillStyle = '#fff';
-  ctx.font = '16px Arial';
-  ctx.fillText(new Date().toLocaleString(), 10, canvas.height - 15);
+  try{
+    const res = await fetch(GAS_URL,{
+      method:"POST",
+      body: JSON.stringify({ image: captured })
+    });
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+    const txt = await res.text();
+    const data = JSON.parse(txt);
 
-  // ✅ ส่งกลับ GAS
+    if(data.status === "success"){
+      write("✅ สำเร็จ");
+      resultBox.style.display = "block";
+      resultBox.innerHTML = `ไฟล์: ${data.fileName}<br><a href="${data.url}" target="_blank">เปิดรูป</a>`;
+    }else{
+      write("❌ error: "+data.message);
+    }
+
+  }catch(e){
+    write("❌ ส่งไม่สำเร็จ: "+e.message);
+  }
+}
+
+// ✅ วิธีที่ 2 → ส่งกลับ popup (ใช้กับ GAS index)
+function sendBack(){
+  if(!captured){ alert("ยังไม่มีภาพ"); return; }
+
   if(window.opener){
     window.opener.postMessage({
-      image: dataUrl,
-      ts: Date.now()
-    }, allowedOrigin);
+      type:"camera-image",
+      imageBase64: captured
+    },"*");
+
+    alert("ส่งกลับแล้ว");
+  }else{
+    alert("ไม่มีหน้าหลัก");
   }
+}
 
-  // ปิดหน้ากล้อง
-  window.close();
-};
+document.getElementById("startBtn").onclick = startCamera;
+document.getElementById("snapBtn").onclick = snap;
+document.getElementById("uploadBtn").onclick = upload;
+document.getElementById("backBtn").onclick = sendBack;
 </script>
-
 </body>
 </html>
