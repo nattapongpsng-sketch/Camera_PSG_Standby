@@ -182,6 +182,8 @@ let detectTimer = null;
 let stableHits = 0;
 let busyCapturing = false;
 let faceApiSupported = false;
+let cameraStarting = false;
+let detectionRunning = false;
 
 const REQUIRED_STABLE_HITS = 4;  // อยู่ในกรอบต่อเนื่อง 4 รอบ
 const DETECT_INTERVAL_MS = 450;
@@ -236,14 +238,18 @@ function toViewportRect(box){
   const vw = video.videoWidth || 1;
   const vh = video.videoHeight || 1;
 
-  const scaleX = vr.width / vw;
-  const scaleY = vr.height / vh;
+  // object-fit: cover ใช้ scale เดียวและตัดส่วนเกินตรงกลาง
+  const scale = Math.max(vr.width / vw, vr.height / vh);
+  const renderedWidth = vw * scale;
+  const renderedHeight = vh * scale;
+  const offsetX = (vr.width - renderedWidth) / 2;
+  const offsetY = (vr.height - renderedHeight) / 2;
 
   return {
-    left: vr.left + box.x * scaleX,
-    top: vr.top + box.y * scaleY,
-    width: box.width * scaleX,
-    height: box.height * scaleY
+    left: vr.left + offsetX + box.x * scale,
+    top: vr.top + offsetY + box.y * scale,
+    width: box.width * scale,
+    height: box.height * scale
   };
 }
 
@@ -266,19 +272,40 @@ function captureAndSend(){
   setStatus('กำลังถ่ายภาพ…', true);
 
   const canvas = document.createElement('canvas');
-  canvas.width = 640;
-  canvas.height = 480;
+  const sourceWidth = video.videoWidth || 640;
+  const sourceHeight = video.videoHeight || 480;
+  const outputScale = Math.min(1, 1280 / sourceWidth);
+  canvas.width = Math.max(1, Math.round(sourceWidth * outputScale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * outputScale));
 
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
+  const requestedParentOrigin = new URLSearchParams(location.search).get('parentOrigin');
+  let targetOrigin = '*'; // รองรับหน้า Apps Script รุ่นเดิมที่ยังไม่ได้ส่ง parentOrigin
+  if(requestedParentOrigin){
+    try{
+      const parentUrl = new URL(requestedParentOrigin);
+      const allowedGoogleOrigin = parentUrl.protocol === 'https:' && (
+        parentUrl.hostname === 'script.google.com' ||
+        parentUrl.hostname.endsWith('.googleusercontent.com')
+      );
+      if(allowedGoogleOrigin) targetOrigin = parentUrl.origin;
+    }catch(e){}
+  }
+
   if(window.opener){
     window.opener.postMessage({
       type: "camera-image",
       imageBase64: dataUrl
-    }, "*");
+    }, targetOrigin);
+  }else{
+    setStatus('ไม่พบหน้าต้นทางสำหรับรับภาพ');
+    busyCapturing = false;
+    snapBtn.disabled = false;
+    return;
   }
 
   closeAndCleanup();
@@ -287,14 +314,15 @@ function captureAndSend(){
 
 snapBtn.onclick = () => {
   if(!stream){
-    alert("กล้องยังไม่พร้อม");
+    startCamera();
     return;
   }
   captureAndSend();
 };
 
 async function detectLoop(){
-  if(!faceApiSupported || !detector || !stream || busyCapturing) return;
+  if(!faceApiSupported || !detector || !stream || busyCapturing || detectionRunning) return;
+  detectionRunning = true;
 
   try{
     const faces = await detector.detect(video);
@@ -345,17 +373,80 @@ async function detectLoop(){
       clearInterval(detectTimer);
       detectTimer = null;
     }
+  } finally {
+    detectionRunning = false;
   }
 }
 
-async function startCamera(){
+async function requestCameraStream(){
+  const preferred = {
+    video: {
+      facingMode: { ideal: 'user' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    },
+    audio: false
+  };
+
   try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode:"user" },
-      audio: false
-    });
+    return await navigator.mediaDevices.getUserMedia(preferred);
+  }catch(firstError){
+    // การปฏิเสธสิทธิ์แก้ด้วยการเปลี่ยนอุปกรณ์ไม่ได้
+    if(firstError && (firstError.name === 'NotAllowedError' || firstError.name === 'SecurityError')){
+      throw firstError;
+    }
+
+    // Chrome บางเครื่องจำ Virtual Camera/กล้องที่ใช้งานไม่ได้เป็นค่าเริ่มต้น
+    // จึงลองอุปกรณ์วิดีโอทีละตัวด้วย deviceId ที่เจาะจง
+    let devices = [];
+    try{
+      devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(device => device.kind === 'videoinput' && device.deviceId);
+    }catch(e){}
+
+    for(const device of devices){
+      try{
+        return await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: device.deviceId } },
+          audio: false
+        });
+      }catch(e){}
+    }
+
+    throw firstError;
+  }
+}
+
+function cameraErrorMessage(err){
+  const name = err && err.name ? err.name : 'CameraError';
+  if(name === 'NotAllowedError' || name === 'SecurityError'){
+    return `Chrome ยังไม่ได้รับสิทธิ์ใช้กล้อง (${name})`;
+  }
+  if(name === 'NotFoundError'){
+    return `ไม่พบอุปกรณ์กล้อง (${name})`;
+  }
+  if(name === 'NotReadableError' || /Could not start video source/i.test(err && err.message || '')){
+    return `Chrome เปิดอุปกรณ์กล้องไม่ได้ อาจถูกโปรแกรมอื่นใช้งานอยู่ (${name})`;
+  }
+  return `เปิดกล้องไม่ได้: ${err && err.message ? err.message : name}`;
+}
+
+async function startCamera(){
+  if(cameraStarting || stream) return;
+  cameraStarting = true;
+  snapBtn.disabled = true;
+  snapBtn.textContent = 'กำลังเปิดกล้อง…';
+  setStatus('กำลังเปิดกล้อง…');
+
+  try{
+    if(!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('เบราว์เซอร์หรือหน้าเว็บนี้ไม่รองรับการเปิดกล้องแบบปลอดภัย');
+    }
+
+    stream = await requestCameraStream();
     video.srcObject = stream;
     await video.play();
+    snapBtn.textContent = '📸 ถ่ายภาพ';
 
     // Feature detection
     if("FaceDetector" in window){
@@ -370,8 +461,15 @@ async function startCamera(){
       subhint.textContent = 'จัดใบหน้าให้อยู่ในกรอบ แล้วกดถ่ายภาพ';
     }
   } catch(err){
-    alert("เปิดกล้องไม่ได้: " + err.message);
-    setStatus('เปิดกล้องไม่สำเร็จ');
+    stopCamera();
+    const message = cameraErrorMessage(err);
+    setStatus(message);
+    subhint.textContent = 'ปิดแอปที่ใช้กล้อง ตรวจสิทธิ์ Chrome แล้วกดปุ่มเพื่อลองใหม่';
+    snapBtn.textContent = 'ลองเปิดกล้องอีกครั้ง';
+    alert(message);
+  } finally {
+    cameraStarting = false;
+    snapBtn.disabled = false;
   }
 }
 
